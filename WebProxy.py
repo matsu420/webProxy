@@ -2,6 +2,7 @@ import requests
 import threading
 import socket
 import sys
+import logging
 
 class Client:
     def __init__(self, sock, addr):
@@ -28,9 +29,12 @@ class Client:
 
 
 class WebProxy:
+    LOGLEVEL = logging.DEBUG
     def __init__(self, host = '127.0.0.1', port = 80):
         self.host = host
         self.port = port
+
+        logging.basicConfig(filename = 'webproxy.log', level = WebProxy.LOGLEVEL)
         #self.sessions = []
 
 
@@ -136,11 +140,11 @@ class WebProxy:
             client.sendto(WebProxy.makeHttpResponse(res))
 
         except HTTPHeaderFormatException as e:
-            print e
+            logging.exception(e)
         except HTTPMethodException as e :
-            print e
+            logging.exception(e)
         except Exception as e:
-            print e
+            logging.exception(e)
         finally:
             client.sock.close()
 
