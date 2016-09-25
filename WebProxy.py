@@ -59,7 +59,8 @@ class WebProxy:
             thread = threading.Thread(target = self.handler, args = (client, session))
             thread.start()
 
-    def makeHttpResponse(self, res):
+    @classmethod
+    def makeHttpResponse(cls, res):
         response = ''
         header = ''
         for key, value in res.headers.iteritems():
@@ -71,15 +72,8 @@ class WebProxy:
 
         return response
 
-    def handler(self, client, session):
-        #client_data = client.recvfrom()
-
-        try:
-            client_data = client.sock.recv(4096)
-            if len(client_data) == 0:
-                raise Exception('data not received')
-
-
+    @classmethod
+    def parseHttpHeader(cls, client_data):
             client_data.replace('\r\n', '\n')
 
             print "[*]client data:"
@@ -119,26 +113,44 @@ class WebProxy:
                 if key == 'targeturl':
                     req_url += value
 
+            return (method, req_url)
+
+    def handler(self, client, session):
+        #client_data = client.recvfrom()
+
+        try:
+            client_data = client.sock.recv(4096)
+            if len(client_data) == 0:
+                raise Exception('data not received')
+
+            method, req_url = WebProxy.parseHttpHeader(client_data)
+
             if method == 'get':
                 print "[*]get: " + req_url
-                #res = session.get(req_url, stream = True)
                 res = session.get(req_url)
                 print "done get"
             else:
                 print "no method"
-                raise HTTPHeaderFormatException(client_data)
+                raise HTTPMethodException(method)
 
-            #print client_response
-
-            client.sendto(self.makeHttpResponse(res))
+            client.sendto(WebProxy.makeHttpResponse(res))
 
         except HTTPHeaderFormatException as e:
+            print e
+        except HTTPMethodException as e :
             print e
         except Exception as e:
             print e
         finally:
             client.sock.close()
 
+
+class HTTPMethodException(Exception):
+    def __init__(self, method):
+        self.method = method
+
+    def __str__(self):
+        return 'Method "%s" is not known' % self.method
 
 
 class HTTPHeaderFormatException(Exception):
