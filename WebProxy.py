@@ -22,40 +22,47 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
 
     def do_GET(self):
-        client_host, client_port = self.client_address
+        try:
+            client_host, client_port = self.client_address
 
-        session = None
-        key = "%s:%d" % (client_host, client_port)
-        if WebProxyHandler.sessions.has_key(key):
-            session = WebProxyHandler.sessions[key]
-        else:
-            session = requests.Session()
-            WebProxyHandler.sessions[key] = session
+            session = None
 
-        req_path = self.path
+            key = "%s:%d" % (client_host, client_port)
 
-        index = req_path.find('?')
+            logging.info('Connection from ' + key)
 
-        param_str = req_path[(index + 1):]
+            if WebProxyHandler.sessions.has_key(key):
+                session = WebProxyHandler.sessions[key]
+            else:
+                session = requests.Session()
+                WebProxyHandler.sessions[key] = session
 
-        param = param_str.split('=')
+            req_path = self.path
 
-        if param[0] == "targeturl":
-            req_url = "http://" + param[1]
-        else:
-            raise HTTPHeaderFormatException
+            index = req_path.find('?')
 
-        print "req_url: " + req_url
+            param_str = req_path[(index + 1):]
 
-        res = session.get(req_url, stream = True)
+            param = param_str.split('=')
 
-        self.send_response(res.status_code)
+            if param[0] == "targeturl":
+                req_url = "http://" + param[1]
+            else:#instead of raising exception return form
+                raise HTTPHeaderFormatException
 
-        self.sendHttpHeader(res)
+            res = session.get(req_url, stream = True)
 
-        self.end_headers()
+            logging.info('session.get: ' + req_url)
 
-        self.wfile.write(res.raw.read())
+            self.send_response(res.status_code)
+
+            self.sendHttpHeader(res)
+
+            self.end_headers()
+
+            self.wfile.write(res.raw.read())
+        except Exception as e:
+            logging.exception(e)
 
         return 
 
