@@ -12,6 +12,7 @@ from SocketServer import ThreadingMixIn
 #gzip before sending
 #try to support headers(e.g.gzip, content-length, keep-alive)
 #change replace_url to instance method
+#prepare a queue to sotre session client, and delete the old session when it is full.
 
 class WebProxyHandler(BaseHTTPRequestHandler):
     sessions = dict()
@@ -118,6 +119,7 @@ class WebProxyHandler(BaseHTTPRequestHandler):
             if not 'gzip' in value and not 'content-length' in key.lower() and not 'keep-alive' in value.lower():
                 self.send_header(key, value)
 
+
     def prepare(self):
         client_host, client_port = self.client_address
 
@@ -140,9 +142,6 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
             session = self.prepare()
 
-            targeturl = str()
-            domain = str()
-
             targeturl, domain = WebProxyHandler.parse_path(self.path)
 
             res = session.get(targeturl)
@@ -163,6 +162,42 @@ class WebProxyHandler(BaseHTTPRequestHandler):
             logging.exception(e)
 
         return 
+
+    def do_POST(self):
+        try:
+            session = self.prepare()
+
+            targeturl, domain = WebProxyHandler.parse_path(self.path)
+
+            content_len = int(self.headers.getheader('content-length', 0))
+
+            post_body = self.rfile.read(content_len)
+
+            param_strs = post_body.split('&')
+
+            post_data = dict()
+
+            if content_len > 0:
+                for param_str in param_strs:
+                    key, value = param_str.split('=')
+                    post_data[key] = value
+
+            res = session.post(targeturl, data = post_data)
+
+            logging.info('POST ' + targeturl)
+
+            self.send_response(res.status_code)
+
+            self.sendHttpHeader(res)
+
+            self.end_headers()
+
+            if 'text/html' in res.headers['content-type']:
+                self.wfile.write(WebProxyHandler.replace_url(res.content, 'localhost', 8080, domain))
+            else:
+                self.wfile.write(res.content)
+        except Exception as e:
+            logging.exception(e)
 
 
 class ThreadedWebProxy(ThreadingMixIn, HTTPServer):
