@@ -9,10 +9,9 @@ from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
 from SocketServer import ThreadingMixIn
 
 #TODO: 
-#replace urls to target proxy
 #gzip before sending
-#implement function: parseurl(function to parse url and obtain target_url)
 #try to support headers(e.g.gzip, content-length, keep-alive)
+#change replace_url to instance method
 
 class WebProxyHandler(BaseHTTPRequestHandler):
     sessions = dict()
@@ -31,7 +30,6 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
         return (url, schema)
 
-
     @classmethod
     def replace_url(cls, content, server_host, server_port, domain):
         urls = re.findall(r'href=[\'"]?([^\'" >]+)', content)
@@ -48,7 +46,6 @@ class WebProxyHandler(BaseHTTPRequestHandler):
         else:
             for change_from_url in urls:
                 original_url = change_from_url
-                print 'change: ' +change_from_url
                 if not 'http' in server_host:
                     server_host = 'http://' + server_host
                 change_to_url = server_host + ':' + str(server_port) + '?targeturl='
@@ -67,11 +64,7 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
                 change_from_url = WebProxyHandler.percent_encode(change_from_url)
                 change_to_url += change_from_url
-                print 'change_to: ' + change_to_url
                 content = content.replace(original_url, change_to_url)
-
-            print 'return '
-            print content
 
             return content
 
@@ -83,7 +76,19 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
         param = param_str.split('=')
 
-        return param
+        if param[0] == "targeturl":
+            targeturl = param[1]
+            targeturl = WebProxyHandler.percent_decode(targeturl)
+
+            if not "http" in targeturl:
+                targeturl = 'http://' + targeturl
+
+            domain = WebProxyHandler.domain_pat.search(targeturl).group()
+
+        else:#instead of raising exception return form
+            raise HTTPHeaderFormatException(self.getHttpHeader())
+
+        return (targeturl, domain)
 
 
     
@@ -99,58 +104,50 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
         return urllib.unquote(url)
 
+    def getHttpHeader(self):
+        header = str()
+        for key, value in res.headers.iteritems():
+            header += '%s: %s' % (key, value)
+            header += '\n'
+
+        return header
+
+
     def sendHttpHeader(self, res):
         for key, value in res.headers.iteritems():
             if not 'gzip' in value and not 'content-length' in key.lower() and not 'keep-alive' in value.lower():
-                print '%s: %s' % (key, value)
                 self.send_header(key, value)
 
+    def prepare(self):
+        client_host, client_port = self.client_address
+
+        session = None
+
+        key = "%s:%d" % (client_host, client_port)
+
+        logging.info('Connection from ' + key)
+
+        if WebProxyHandler.sessions.has_key(key):
+            session = WebProxyHandler.sessions[key]
+        else:
+            session = requests.Session()
+            WebProxyHandler.sessions[key] = session
+
+        return session
 
     def do_GET(self):
         try:
-            client_host, client_port = self.client_address
 
-            session = None
-
-            key = "%s:%d" % (client_host, client_port)
-
-            logging.info('Connection from ' + key)
-
-            if WebProxyHandler.sessions.has_key(key):
-                session = WebProxyHandler.sessions[key]
-            else:
-                session = requests.Session()
-                WebProxyHandler.sessions[key] = session
+            session = self.prepare()
 
             targeturl = str()
             domain = str()
 
-            param = WebProxyHandler.parse_path(self.path)
-
-            if param[0] == "targeturl":
-                targeturl = param[1]
-                targeturl = WebProxyHandler.percent_decode(targeturl)
-
-                print 'targeturl: ' + targeturl
-
-                if not "http" in targeturl:
-                    targeturl = 'http://' + targeturl
-
-                print 'here'
-
-                domain = WebProxyHandler.domain_pat.search(targeturl).group()
-
-                print 'domain: ' + domain
-
-            else:#instead of raising exception return form
-                print "header format wrong"
-                raise HTTPHeaderFormatException('sorry not implemented ')
-
-            print 'targeturl: ' + targeturl
+            targeturl, domain = WebProxyHandler.parse_path(self.path)
 
             res = session.get(targeturl)
 
-            logging.info('session.get: ' + targeturl)
+            logging.info('GET ' + targeturl)
 
             self.send_response(res.status_code)
 
@@ -159,8 +156,7 @@ class WebProxyHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
             if 'text/html' in res.headers['content-type']:
-                ret = WebProxyHandler.replace_url(res.content, 'localhost', 8080, domain)
-                self.wfile.write(ret)
+                self.wfile.write(WebProxyHandler.replace_url(res.content, 'localhost', 8080, domain))
             else:
                 self.wfile.write(res.content)
         except Exception as e:
