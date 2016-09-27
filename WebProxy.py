@@ -9,16 +9,101 @@ from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
 from SocketServer import ThreadingMixIn
 
 #TODO: 
-#implement exception code.
-#implement logging
 #replace urls to target proxy
+#gzip before sending
+#implement function: parseurl(function to parse url and obtain target_url)
+#try to support headers(e.g.gzip, content-length, keep-alive)
 
 class WebProxyHandler(BaseHTTPRequestHandler):
     sessions = dict()
+    domain_pat = re.compile('(?<=://)[^/]*')
+    schema_pat = re.compile('[a-z]*://')
+
+    @classmethod 
+    def remove_schema(cls, url):#removes schema from url and return it.
+        schema_match = WebProxyHandler.schema_pat.match(url)
+        schema = str()
+        if not schema_match is None:
+            schema = schema_match.group()
+            url = url.replace(schema, '')
+        else:
+            schema = 'http://'
+
+        return (url, schema)
+
+
+    @classmethod
+    def replace_url(cls, content, server_host, server_port, domain):
+        urls = re.findall(r'href=[\'"]?([^\'" >]+)', content)
+
+        temp = re.findall(r'src=[\'"]?([^\'" >]+)', content)
+
+        if not urls is None and not temp is None:
+            urls.extend(temp)
+        elif urls is None:
+            urls = temp
+
+        if urls is None:
+            raise URLReplacementException()
+        else:
+            for change_from_url in urls:
+                original_url = change_from_url
+                print 'change: ' +change_from_url
+                if not 'http' in server_host:
+                    server_host = 'http://' + server_host
+                change_to_url = server_host + ':' + str(server_port) + '?targeturl='
+
+                change_from_url = str(change_from_url)
+
+                change_from_url, schema = WebProxyHandler.remove_schema(change_from_url)
+
+                if change_from_url[0] != '/':
+                    change_from_url = '/' + change_from_url
+
+                if not domain in change_from_url:
+                    change_from_url = domain + change_from_url
+
+                change_from_url = schema + change_from_url
+
+                change_from_url = WebProxyHandler.percent_encode(change_from_url)
+                change_to_url += change_from_url
+                print 'change_to: ' + change_to_url
+                content = content.replace(original_url, change_to_url)
+
+            print 'return '
+            print content
+
+            return content
+
+    @classmethod
+    def parse_path(cls, path):
+        index = path.find('?')
+
+        param_str = path[(index + 1):]
+
+        param = param_str.split('=')
+
+        return param
+
+
+    
+    @classmethod
+    def percent_encode(cls, url):
+        url = urllib.quote(url, safe = '')
+
+        return url.replace('.', '%2E')
+
+    @classmethod
+    def percent_decode(cls, url):
+        url = url.replace('%2E', '.')
+
+        return urllib.unquote(url)
 
     def sendHttpHeader(self, res):
         for key, value in res.headers.iteritems():
-            self.send_header(key, value)
+            if not 'gzip' in value and not 'content-length' in key.lower() and not 'keep-alive' in value.lower():
+                print '%s: %s' % (key, value)
+                self.send_header(key, value)
 
 
     def do_GET(self):
@@ -37,22 +122,35 @@ class WebProxyHandler(BaseHTTPRequestHandler):
                 session = requests.Session()
                 WebProxyHandler.sessions[key] = session
 
-            req_path = self.path
+            targeturl = str()
+            domain = str()
 
-            index = req_path.find('?')
-
-            param_str = req_path[(index + 1):]
-
-            param = param_str.split('=')
+            param = WebProxyHandler.parse_path(self.path)
 
             if param[0] == "targeturl":
-                req_url = "http://" + param[1]
+                targeturl = param[1]
+                targeturl = WebProxyHandler.percent_decode(targeturl)
+
+                print 'targeturl: ' + targeturl
+
+                if not "http" in targeturl:
+                    targeturl = 'http://' + targeturl
+
+                print 'here'
+
+                domain = WebProxyHandler.domain_pat.search(targeturl).group()
+
+                print 'domain: ' + domain
+
             else:#instead of raising exception return form
-                raise HTTPHeaderFormatException
+                print "header format wrong"
+                raise HTTPHeaderFormatException('sorry not implemented ')
 
-            res = session.get(req_url, stream = True)
+            print 'targeturl: ' + targeturl
 
-            logging.info('session.get: ' + req_url)
+            res = session.get(targeturl)
+
+            logging.info('session.get: ' + targeturl)
 
             self.send_response(res.status_code)
 
@@ -60,7 +158,11 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
             self.end_headers()
 
-            self.wfile.write(res.raw.read())
+            if 'text/html' in res.headers['content-type']:
+                ret = WebProxyHandler.replace_url(res.content, 'localhost', 8080, domain)
+                self.wfile.write(ret)
+            else:
+                self.wfile.write(res.content)
         except Exception as e:
             logging.exception(e)
 
