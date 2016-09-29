@@ -4,15 +4,21 @@ import socket
 import sys
 import logging
 import re
+import gzip
 import urllib
+import os.path
+
 from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
 from SocketServer import ThreadingMixIn
+from HttpLogger import HttpLogger
 
 #TODO: 
 #gzip before sending
 #try to support headers(e.g.gzip, content-length, keep-alive)
-#change replace_url to instance method
-#prepare a queue to sotre session client, and delete the old session when it is full.
+#change some of the class methods to instance method
+#prepare a queue to store session client, and delete the old session when it is full.
+
+#changed replace_url to instance method and not tested
 
 class WebProxyHandler(BaseHTTPRequestHandler):
     sessions = dict()
@@ -31,11 +37,15 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
         return (url, schema)
 
-    @classmethod
-    def replace_url(cls, content, server_host, server_port, domain):
-        urls = re.findall(r'href=[\'"]?([^\'" >]+)', content)
+    def replace_url(self, content):
+        server_host = self.server_host
+        server_port = self.server_port
+        domain = self.domain
 
-        temp = re.findall(r'src=[\'"]?([^\'" >]+)', content)
+
+        urls = re.findall(r'href=[\'"]?([^\'" >]+)', string = content, flags = re.IGNORECASE)
+
+        temp = re.findall(r'src=[\'"]?([^\'" >]+)', string = content, flags = re.IGNORECASE)
 
         if not urls is None and not temp is None:
             urls.extend(temp)
@@ -47,6 +57,7 @@ class WebProxyHandler(BaseHTTPRequestHandler):
         else:
             for change_from_url in urls:
                 original_url = change_from_url
+
                 if not 'http' in server_host:
                     server_host = 'http://' + server_host
                 change_to_url = server_host + ':' + str(server_port) + '?targeturl='
@@ -69,11 +80,10 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
             return content
 
-    @classmethod
-    def parse_path(cls, path):
-        index = path.find('?')
+    def parse_path(self):
+        index = self.path.find('?')
 
-        param_str = path[(index + 1):]
+        param_str = self.path[(index + 1):]
 
         param = param_str.split('=')
 
@@ -87,7 +97,7 @@ class WebProxyHandler(BaseHTTPRequestHandler):
             domain = WebProxyHandler.domain_pat.search(targeturl).group()
 
         else:#instead of raising exception return form
-            raise HTTPHeaderFormatException(self.getHttpHeader())
+            raise PathParsingException(self.path)
 
         return (targeturl, domain)
 
@@ -105,29 +115,41 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
         return urllib.unquote(url)
 
-    def getHttpHeader(self):
+    def getHttpReqHeader(self):
         header = str()
-        for key, value in res.headers.iteritems():
-            header += '%s: %s' % (key, value)
+        for name in self.headers:
+            header += name 
+            header += self.headers.getheader(name)
             header += '\n'
 
         return header
 
 
     def sendHttpHeader(self, res):
+        self.gzip_allowed = False
         for key, value in res.headers.iteritems():
-            if not 'gzip' in value and not 'content-length' in key.lower() and not 'keep-alive' in value.lower():
+            if 'gzip' in value.lower():
+                self.gzip_allowed = True
+
+            if 'connection' in key.lower():
+                print key + ': ' + value
+
+            if not 'content-length' in key.lower():
                 self.send_header(key, value)
 
 
     def prepare(self):
+        self.proxy_logger = HttpLogger(server_handler = self,level = logging.DEBUG)
+
+        self.proxy_logger.log_access()
+
         client_host, client_port = self.client_address
 
         session = None
 
-        key = "%s:%d" % (client_host, client_port)
+        self.protocol_version = 'HTTP/1.1'
 
-        logging.info('Connection from ' + key)
+        key = "%s:%d" % (client_host, client_port)
 
         if WebProxyHandler.sessions.has_key(key):
             session = WebProxyHandler.sessions[key]
@@ -142,32 +164,74 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
             session = self.prepare()
 
-            targeturl, domain = WebProxyHandler.parse_path(self.path)
+            if 'favicon' in self.path:
+                self.send_response(404)
+                self.end_headers()
 
-            res = session.get(targeturl)
+                return 
 
-            logging.info('GET ' + targeturl)
+            targeturl, domain = self.parse_path()
 
-            self.send_response(res.status_code)
+            self.domain = domain
 
-            self.sendHttpHeader(res)
+            self.res = session.get(targeturl)
 
-            self.end_headers()
+            self.proxy_logger.log_proxy_action(url = targeturl)
 
-            if 'text/html' in res.headers['content-type']:
-                self.wfile.write(WebProxyHandler.replace_url(res.content, 'localhost', 8080, domain))
-            else:
-                self.wfile.write(res.content)
+            self.send_response(self.res.status_code)
+
+            self.sendHttpHeader(self.res)
+
+
+            filepath = '/tmp/webproxy/'
+
+            if 'text/html' in self.res.headers['content-type']:
+                self.server_host = 'localhost'
+                self.server_port = 8080
+                url_replaced = self.replace_url(self.res.content)
+
+                if not os.path.exists(filepath):
+                    os.mkdir(filepath)
+
+                filepath += targeturl.replace('/', '_')
+                if self.gzip_allowed:
+                    gzipfilepath = filepath + '.gz'
+                    with gzip.open(gzipfilepath, 'w') as f_out:
+                        f_out.write(url_replaced)
+                    with open(gzipfilepath, 'r') as f_in:
+                        url_replaced = f_in.read()
+
+                    self.send_header('Content-Length', os.path.getsize(gzipfilepath))
+
+                else:#send raw content size
+                    with open(filepath, 'w') as f_out:
+                        f_out.write(url_replaced)
+
+                    self.send_header('Content-Length', os.path.getsize(filepath))
+
+                self.end_headers()
+
+                self.wfile.write(url_replaced)
+            else:#send raw content size
+                filepath += targeturl.replace('/', '_')
+                with open(filepath, 'w') as f_out:
+                    f_out.write(self.res.content)
+
+                self.send_header('Content-Length', os.path.getsize(filepath))
+
+                self.end_headers()
+                self.wfile.write(self.res.content)
         except Exception as e:
-            logging.exception(e)
+            self.proxy_logger.log_exception(e)
 
         return 
+
 
     def do_POST(self):
         try:
             session = self.prepare()
 
-            targeturl, domain = WebProxyHandler.parse_path(self.path)
+            targeturl, domain = self.parse_path()
 
             content_len = int(self.headers.getheader('content-length', 0))
 
@@ -182,22 +246,20 @@ class WebProxyHandler(BaseHTTPRequestHandler):
                     key, value = param_str.split('=')
                     post_data[key] = value
 
-            res = session.post(targeturl, data = post_data)
+            self.res = session.post(targeturl, data = post_data)
 
-            logging.info('POST ' + targeturl)
+            self.send_response(self.res.status_code)
 
-            self.send_response(res.status_code)
-
-            self.sendHttpHeader(res)
+            self.sendHttpHeader(self.res)
 
             self.end_headers()
 
-            if 'text/html' in res.headers['content-type']:
-                self.wfile.write(WebProxyHandler.replace_url(res.content, 'localhost', 8080, domain))
+            if 'text/html' in self.res.headers['content-type']:
+                self.wfile.write(self.replace_url(self.res.content, 'localhost', 8080, domain))
             else:
-                self.wfile.write(res.content)
+                self.wfile.write(self.res.content)
         except Exception as e:
-            logging.exception(e)
+            self.proxy_logger.log_exception(e)
 
 
 class ThreadedWebProxy(ThreadingMixIn, HTTPServer):
@@ -210,12 +272,20 @@ class URLReplacementException(Exception):
         return 'Cannot replace URL'
 
 
+class PathParsingException(Exception):
+    def __init__(self, path):
+        self.path = path
+
+    def __str__(self):
+        return "\nCannot parse path:" + self.path
+
+
 class HTTPHeaderFormatException(Exception):
     def __init__(self, header):
         self.header = header
 
     def __str__(self):
-        ret = "Cannot parse following HTTP header: \n"
+        ret = "\nCannot parse following HTTP header: \n"
         ret += self.header
 
         return ret
