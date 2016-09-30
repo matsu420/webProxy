@@ -17,6 +17,7 @@ from HttpLogger import HttpLogger
 #try to support headers(e.g.gzip, content-length, keep-alive)
 #change some of the class methods to instance method
 #prepare a queue to store session client, and delete the old session when it is full.
+#dont replace the same url serveral times
 
 #changed replace_url to instance method and not tested
 
@@ -26,7 +27,7 @@ class WebProxyHandler(BaseHTTPRequestHandler):
     schema_pat = re.compile('[a-z]*://')
 
     @classmethod 
-    def remove_schema(cls, url):#removes schema from url and return it.
+    def remove_schema(cls, url):#removes schema from url and return the schema and the url.
         schema_match = WebProxyHandler.schema_pat.match(url)
         schema = str()
         if not schema_match is None:
@@ -45,7 +46,7 @@ class WebProxyHandler(BaseHTTPRequestHandler):
         else:
             return temp
 
-    def replace_url(self):
+    def replace_url(self):#replace the urls to target the proxy
         server_host = self.server_host
         server_port = self.server_port
         domain = self.domain
@@ -55,33 +56,41 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
         urls.extend(self.get_replace_urls(r'href=[\'"]?([^\'" >]+)'))
         urls.extend(self.get_replace_urls(r'src=[\'"]?([^\'" >]+)'))
-        urls.extend(self.get_replace_urls(r'(?<=url\()[^)]*'))
+        urls.extend(self.get_replace_urls(r'action=[\'"]?([^\'" >]+)'))
+        urls.extend(self.get_replace_urls(r'(?<=url\([\'\"])[^\'\"]*'))
 
-        if urls is None:
+        if urls is None:#there is a possibility that the page has no links
             raise URLReplacementException()
         else:
             for change_from_url in urls:
                 original_url = change_from_url
 
+
                 if not 'http' in server_host:
                     server_host = 'http://' + server_host
+
                 change_to_url = server_host + ':' + str(server_port) + '?targeturl='
 
                 change_from_url = str(change_from_url)
 
+                has_domain = None
+
+                if 'http' in change_from_url:
+                    has_domain = True
+                else:
+                    has_domain = False
+
                 change_from_url, schema = WebProxyHandler.remove_schema(change_from_url)
 
-                if change_from_url[0] != '/':
-                    change_from_url = '/' + change_from_url
-
-                if not domain in change_from_url:
+                if not has_domain:
                     change_from_url = domain + change_from_url
 
                 change_from_url = schema + change_from_url
 
                 change_from_url = WebProxyHandler.percent_encode(change_from_url)
                 change_to_url += change_from_url
-                ret_content = ret_content.replace(original_url, change_to_url)
+                url_pat_str = '(?<=[\("])' + re.escape(original_url) + '(?=[\)"])'
+                ret_content = re.sub(url_pat_str, change_to_url, ret_content)
 
             return ret_content
 
@@ -135,9 +144,6 @@ class WebProxyHandler(BaseHTTPRequestHandler):
         for key, value in res.headers.iteritems():
             if 'gzip' in value.lower():
                 self.gzip_allowed = True
-
-            #if 'connection' in key.lower():
-                #print key + ': ' + value
 
             if not 'content-length' in key.lower():
                 self.send_header(key, value)
