@@ -37,20 +37,25 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
         return (url, schema)
 
-    def replace_url(self, content):
+    def get_replace_urls(self, pat_str):
+        temp = re.findall(pat_str, string = self.res.content, flags = re.IGNORECASE)
+
+        if temp is None:
+            return []
+        else:
+            return temp
+
+    def replace_url(self):
         server_host = self.server_host
         server_port = self.server_port
         domain = self.domain
+        ret_content = self.res.content
 
+        urls = []
 
-        urls = re.findall(r'href=[\'"]?([^\'" >]+)', string = content, flags = re.IGNORECASE)
-
-        temp = re.findall(r'src=[\'"]?([^\'" >]+)', string = content, flags = re.IGNORECASE)
-
-        if not urls is None and not temp is None:
-            urls.extend(temp)
-        elif urls is None:
-            urls = temp
+        urls.extend(self.get_replace_urls(r'href=[\'"]?([^\'" >]+)'))
+        urls.extend(self.get_replace_urls(r'src=[\'"]?([^\'" >]+)'))
+        urls.extend(self.get_replace_urls(r'(?<=url\()[^)]*'))
 
         if urls is None:
             raise URLReplacementException()
@@ -76,9 +81,9 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
                 change_from_url = WebProxyHandler.percent_encode(change_from_url)
                 change_to_url += change_from_url
-                content = content.replace(original_url, change_to_url)
+                ret_content = ret_content.replace(original_url, change_to_url)
 
-            return content
+            return ret_content
 
     def parse_path(self):
         index = self.path.find('?')
@@ -131,8 +136,8 @@ class WebProxyHandler(BaseHTTPRequestHandler):
             if 'gzip' in value.lower():
                 self.gzip_allowed = True
 
-            if 'connection' in key.lower():
-                print key + ': ' + value
+            #if 'connection' in key.lower():
+                #print key + ': ' + value
 
             if not 'content-length' in key.lower():
                 self.send_header(key, value)
@@ -188,7 +193,7 @@ class WebProxyHandler(BaseHTTPRequestHandler):
             if 'text/html' in self.res.headers['content-type']:
                 self.server_host = 'localhost'
                 self.server_port = 8080
-                url_replaced = self.replace_url(self.res.content)
+                url_replaced = self.replace_url()
 
                 if not os.path.exists(filepath):
                     os.mkdir(filepath)
