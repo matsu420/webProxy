@@ -116,7 +116,6 @@ class WebProxyHandler(BaseHTTPRequestHandler):
         return (targeturl, domain)
 
 
-    
     @classmethod
     def percent_encode(cls, url):
         url = urllib.quote(url, safe = '')
@@ -139,13 +138,16 @@ class WebProxyHandler(BaseHTTPRequestHandler):
         return header
 
 
-    def sendHttpHeader(self, res):
+    def sendHttpHeader(self):#transfer the headers of result from the target to the client
         self.gzip_allowed = False
-        for key, value in res.headers.iteritems():
+        for key, value in self.res.headers.iteritems():
             if 'gzip' in value.lower():
                 self.gzip_allowed = True
 
-            if not 'content-length' in key.lower():
+            if 'transfer-encoding' in key.lower():
+                print 'transfer-encoding is at: ' + self.res.url
+
+            if not 'content-length' in key.lower() and not 'transfer-encoding' in key.lower():
                 self.send_header(key, value)
 
 
@@ -191,12 +193,13 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
             self.send_response(self.res.status_code)
 
-            self.sendHttpHeader(self.res)
+            self.sendHttpHeader()
 
 
             filepath = '/tmp/webproxy/'
 
-            if 'text/html' in self.res.headers['content-type']:
+
+            if ('text' in self.res.headers['content-type']):
                 self.server_host = 'localhost'
                 self.server_port = 8080
                 url_replaced = self.replace_url()
@@ -205,6 +208,7 @@ class WebProxyHandler(BaseHTTPRequestHandler):
                     os.mkdir(filepath)
 
                 filepath += targeturl.replace('/', '_')
+
                 if self.gzip_allowed:
                     gzipfilepath = filepath + '.gz'
                     with gzip.open(gzipfilepath, 'w') as f_out:
@@ -261,7 +265,7 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
             self.send_response(self.res.status_code)
 
-            self.sendHttpHeader(self.res)
+            self.sendHttpHeader()
 
             self.end_headers()
 
