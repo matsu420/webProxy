@@ -13,12 +13,6 @@ from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
 from SocketServer import ThreadingMixIn
 from HttpLogger import HttpLogger
 
-#TODO: 
-#prepare a queue to store session client, and delete the old session when it is full.
-
-#changed replace_url to instance method and not tested
-#do something about http://// <- four slashes!!
-
 class WebProxyHandler(BaseHTTPRequestHandler):
     sessions = dict()
     domain_pat = re.compile('(?<=://)[^/]*')
@@ -242,41 +236,6 @@ class WebProxyHandler(BaseHTTPRequestHandler):
             self.proxy_logger.log_exception(e)
 
         return 
-
-
-    def do_POST(self):
-        try:
-            session = self.prepare()
-
-            targeturl, domain = self.parse_path()
-
-            content_len = int(self.headers.getheader('content-length', 0))
-
-            post_body = self.rfile.read(content_len)
-
-            param_strs = post_body.split('&')
-
-            post_data = dict()
-
-            if content_len > 0:
-                for param_str in param_strs:
-                    key, value = param_str.split('=')
-                    post_data[key] = value
-
-            self.res = session.post(targeturl, data = post_data)
-
-            self.send_response(self.res.status_code)
-
-            self.sendHttpHeader()
-
-            self.end_headers()
-
-            if 'text/html' in self.res.headers['content-type']:
-                self.wfile.write(self.replace_url(self.res.content, 'localhost', 8080, domain))
-            else:
-                self.wfile.write(self.res.content)
-        except Exception as e:
-            self.proxy_logger.log_exception(e)
 
 
 class ThreadedWebProxy(ThreadingMixIn, HTTPServer):

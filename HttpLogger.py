@@ -1,7 +1,7 @@
 import logging
 
 class HttpLogger:
-    def __init__(self, server_handler, filename = 'http.log', level = logging.INFO, fmt = '%(asctime)s %(message)s'):
+    def __init__(self, server_handler, filename = 'webproxy.log', level = logging.INFO, fmt = '%(asctime)s %(message)s'):
         self.server_handler = server_handler
         logging.basicConfig(filename = filename, level = level, format = fmt)
 
