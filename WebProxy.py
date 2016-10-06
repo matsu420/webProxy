@@ -1,4 +1,5 @@
 import requests
+import hashlib
 import threading
 import socket
 import sys
@@ -13,18 +14,15 @@ from SocketServer import ThreadingMixIn
 from HttpLogger import HttpLogger
 
 #TODO: 
-#gzip before sending
-#try to support headers(e.g.gzip, content-length, keep-alive)
-#change some of the class methods to instance method
 #prepare a queue to store session client, and delete the old session when it is full.
-#dont replace the same url serveral times
 
 #changed replace_url to instance method and not tested
+#do something about http://// <- four slashes!!
 
 class WebProxyHandler(BaseHTTPRequestHandler):
     sessions = dict()
     domain_pat = re.compile('(?<=://)[^/]*')
-    schema_pat = re.compile('[a-z]*://')
+    schema_pat = re.compile('[a-z]*:?//')
 
     @classmethod 
     def remove_schema(cls, url):#removes schema from url and return the schema and the url.
@@ -33,6 +31,8 @@ class WebProxyHandler(BaseHTTPRequestHandler):
         if not schema_match is None:
             schema = schema_match.group()
             url = url.replace(schema, '')
+            if schema == r'//':
+                schema = 'http://'
         else:
             schema = 'http://'
 
@@ -58,6 +58,9 @@ class WebProxyHandler(BaseHTTPRequestHandler):
         urls.extend(self.get_replace_urls(r'src=[\'"]?([^\'" >]+)'))
         urls.extend(self.get_replace_urls(r'action=[\'"]?([^\'" >]+)'))
         urls.extend(self.get_replace_urls(r'(?<=url\([\'\"])[^\'\"]*'))
+        urls.extend(self.get_replace_urls(r'(?<=url\([^\'\"])[^\'\")]*'))
+
+
 
         if urls is None:#there is a possibility that the page has no links
             raise URLReplacementException()
@@ -75,7 +78,7 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
                 has_domain = None
 
-                if 'http' in change_from_url:
+                if '//' in change_from_url:
                     has_domain = True
                 else:
                     has_domain = False
@@ -89,7 +92,7 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
                 change_from_url = WebProxyHandler.percent_encode(change_from_url)
                 change_to_url += change_from_url
-                url_pat_str = '(?<=[\("])' + re.escape(original_url) + '(?=[\)"])'
+                url_pat_str = '(?<=[\(\'\"])' + re.escape(original_url) + '(?=[\)\'\"])'
                 ret_content = re.sub(url_pat_str, change_to_url, ret_content)
 
             return ret_content
@@ -144,9 +147,6 @@ class WebProxyHandler(BaseHTTPRequestHandler):
             if 'gzip' in value.lower():
                 self.gzip_allowed = True
 
-            if 'transfer-encoding' in key.lower():
-                print 'transfer-encoding is at: ' + self.res.url
-
             if not 'content-length' in key.lower() and not 'transfer-encoding' in key.lower():
                 self.send_header(key, value)
 
@@ -199,7 +199,7 @@ class WebProxyHandler(BaseHTTPRequestHandler):
             filepath = '/tmp/webproxy/'
 
 
-            if ('text' in self.res.headers['content-type']):
+            if 'text' in self.res.headers['Content-Type'] or 'css' in self.res.headers['Content-Type'] or 'javascript' in self.res.headers['Content-Type']:
                 self.server_host = 'localhost'
                 self.server_port = 8080
                 url_replaced = self.replace_url()
@@ -207,7 +207,8 @@ class WebProxyHandler(BaseHTTPRequestHandler):
                 if not os.path.exists(filepath):
                     os.mkdir(filepath)
 
-                filepath += targeturl.replace('/', '_')
+                #filepath += targeturl.replace('/', '_')
+                filepath += str(hashlib.md5(targeturl))
 
                 if self.gzip_allowed:
                     gzipfilepath = filepath + '.gz'
@@ -228,7 +229,8 @@ class WebProxyHandler(BaseHTTPRequestHandler):
 
                 self.wfile.write(url_replaced)
             else:#send raw content size
-                filepath += targeturl.replace('/', '_')
+                #filepath += targeturl.replace('/', '_')
+                filepath += str(hashlib.md5(targeturl))
                 with open(filepath, 'w') as f_out:
                     f_out.write(self.res.content)
 
